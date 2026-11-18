@@ -745,7 +745,14 @@ void DlssNr_Dx12::SubmitFinishedCommands(ID3D12CommandQueue* queue, UINT count, 
 bool DlssNr_Dx12::WaitFinished() { return _state->WaitForFinishedPicture(); }
 void DlssNr_Dx12::PrepareStandaloneFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue)
 {
+    // Mirrors Dispatch's bookkeeping so the menu status and retry requests work on this path too.
     std::lock_guard<std::recursive_mutex> lock(_state->mutex);
+    _state->ConsumeControls();
+    struct StandalonePublish
+    {
+        State& s;
+        ~StandalonePublish() { s.Publish(); }
+    } publish { *_state };
     _state->late.CaptureStandalone(picture, queue);
 }
 

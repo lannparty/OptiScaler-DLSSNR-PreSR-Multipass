@@ -402,4 +402,11 @@ auto DlssNr_Dx12::State::LateContext::CaptureStandalone(ID3D12Resource* color, I
     frame.OutputWidth = (unsigned) desc.Width;
     frame.OutputHeight = (unsigned) desc.Height;
     ArmStandalone(slot, queue);
+    static bool reportedArm = false;
+    if (!reportedArm)
+    {
+        reportedArm = true;
+        LOG_INFO("DLSS-NR standalone: slot armed {}x{}, epoch {}, serial {}", frame.OutputWidth,
+                 frame.OutputHeight, (unsigned long long) frame.SubmissionEpoch, (unsigned long long) slot.serial);
+    }
 }

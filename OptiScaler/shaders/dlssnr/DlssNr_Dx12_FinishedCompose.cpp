@@ -12,7 +12,15 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     }
     LateContext::ComPtr<ID3D12Device> currentDevice;
     if (FAILED(queue->GetDevice(IID_PPV_ARGS(&currentDevice))) || currentDevice != late.device)
+    {
+        static bool reportedDevice = false;
+        if (!reportedDevice)
+        {
+            reportedDevice = true;
+            LOG_INFO("DLSS-NR finished picture: the presenting queue belongs to another device; skipping");
+        }
         return false;
+    }
     ID3D12CommandQueue* realQueue = nullptr;
     if (!Util::CheckForRealObject(__FUNCTION__, queue, (IUnknown**) &realQueue))
         realQueue = queue;
@@ -35,6 +43,18 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         DlssNr::ResolvePlacement(cfg.DlssNrRunBeforeSr.value_or_default(), cfg.DlssNrDeferredDlss.value_or_default(),
                                  cfg.DlssNrResidualAcrossRr.value_or_default(), true)
             .deferred;
+    // Snapshot before the loop: the loop itself invalidates stale slots, so its own state says
+    // nothing about why nothing was found.
+    unsigned pendingBefore = 0, submittedBefore = 0;
+    uint64_t newestEpochBefore = 0;
+    for (const auto& s : late.slots)
+        if (s.pending)
+        {
+            ++pendingBefore;
+            if (s.submitted)
+                ++submittedBefore;
+            newestEpochBefore = (std::max)(newestEpochBefore, s.frame.SubmissionEpoch);
+        }
     for (auto& slot : late.slots)
     {
         if (!slot.pending || !slot.submitted)
@@ -66,7 +86,18 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             latest = &held;
     }
     if (!latest)
+    {
+        static bool reportedNoSlot = false;
+        if (!reportedNoSlot)
+        {
+            reportedNoSlot = true;
+            LOG_INFO("DLSS-NR finished picture: no consumable slot (pending {}, submitted {}, newest epoch {}, "
+                     "now {}, picture {}x{})",
+                     pendingBefore, submittedBefore, (unsigned long long) newestEpochBefore,
+                     (unsigned long long) epoch, (unsigned) desc.Width, (unsigned) desc.Height);
+        }
         return false; // loading screen, another swapchain, or this real frame was already consumed
+    }
     auto& slot = *latest;
     const bool holdFinished =
         slot.residualOnly && Config::Instance()->DlssNrHoldFrame.value_or_default() && inputHold.active;
