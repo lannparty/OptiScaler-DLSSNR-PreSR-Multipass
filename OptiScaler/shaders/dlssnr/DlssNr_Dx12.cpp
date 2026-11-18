@@ -743,6 +743,12 @@ void DlssNr_Dx12::SubmitFinishedCommands(ID3D12CommandQueue* queue, UINT count, 
     _state->FinishedPictureSubmitted(queue, count, lists);
 }
 bool DlssNr_Dx12::WaitFinished() { return _state->WaitForFinishedPicture(); }
+void DlssNr_Dx12::PrepareStandaloneFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue)
+{
+    std::lock_guard<std::recursive_mutex> lock(_state->mutex);
+    _state->late.CaptureStandalone(picture, queue);
+}
+
 void DlssNr_Dx12::ApplyFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
                                 bool gameFrameHandoff)
 {
@@ -803,12 +809,6 @@ static DXGI_COLOR_SPACE_TYPE ReadFinishedSpace(IDXGISwapChain* swapchain, ID3D12
     swapchain->GetPrivateData(FinishedColorSpaceKey, &size, &space);
     return space;
 }
-void DlssNr_Dx12::PrepareStandaloneFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue)
-{
-    std::lock_guard<std::recursive_mutex> lock(_state->mutex);
-    _state->late.CaptureStandalone(picture, queue);
-}
-
 void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue)
 {
     if (::State::Instance().isShuttingDown)
