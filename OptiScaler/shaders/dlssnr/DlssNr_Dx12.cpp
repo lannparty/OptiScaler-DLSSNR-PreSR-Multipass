@@ -745,6 +745,29 @@ void DlssNr_Dx12::SubmitFinishedCommands(ID3D12CommandQueue* queue, UINT count, 
 bool DlssNr_Dx12::WaitFinished() { return _state->WaitForFinishedPicture(); }
 void DlssNr_Dx12::PrepareStandaloneFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue)
 {
+    // Preload the NR runtime before anything asks the driver for feature 18. The driver's own
+    // failed validation of the app-folder runtime can leave the file unopenable for the direct
+    // backend that is meant to follow it (observed as ERROR_NET_OPEN_FAILED on the immediate
+    // retry); a module loaded here first is instead borrowed by the compatibility loader, which
+    // supports preloaded modules by design.
+    static bool runtimePreloadDone = false;
+    if (!runtimePreloadDone)
+    {
+        runtimePreloadDone = true;
+        const auto candidate = std::filesystem::path(Util::ExePath().parent_path()) / L"nvngx_dlssnr.dll";
+        HMODULE existing = nullptr;
+        if (GetModuleHandleExW(0, candidate.c_str(), &existing))
+            LOG_INFO("DLSS-NR standalone: runtime already in the process");
+        else
+        {
+            const auto handle = LoadLibraryExW(candidate.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (handle)
+                LOG_INFO("DLSS-NR standalone: runtime preloaded from {}", wstring_to_string(candidate.wstring()));
+            else
+                LOG_WARN("DLSS-NR standalone: runtime preload failed ({})", GetLastError());
+        }
+    }
+
     // Mirrors Dispatch's bookkeeping so the menu status and retry requests work on this path too.
     std::lock_guard<std::recursive_mutex> lock(_state->mutex);
     _state->ConsumeControls();
