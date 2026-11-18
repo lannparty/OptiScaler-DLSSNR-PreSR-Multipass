@@ -794,6 +794,71 @@ static void CheckWorkingMode()
             break;
         }
 
+        // d3d12core.dll (D3D12 Agility side-load)
+        if (lCaseFilename == "d3d12core.dll")
+        {
+            do
+            {
+                auto pluginFilePath = pluginPath / L"d3d12core.dll";
+                originalModule = NtdllProxy::LoadLibraryExW_Ldr(pluginFilePath.wstring().c_str(), NULL, 0);
+                if (originalModule != nullptr)
+                {
+                    if (!_passThruMode)
+                        LOG_INFO("OptiScaler working as d3d12core.dll, original dll loaded from plugin folder");
+
+                    break;
+                }
+
+                originalModule = NtdllProxy::LoadLibraryExW_Ldr(L"D3D12Core-original.dll", NULL, 0);
+                if (originalModule != nullptr)
+                {
+                    if (!_passThruMode)
+                        LOG_INFO("OptiScaler working as d3d12core.dll, D3D12Core-original.dll loaded");
+
+                    break;
+                }
+
+                originalModule = NtdllProxy::LoadLibraryExW_Ldr(L"D3D12Core.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+                if (originalModule != nullptr && !_passThruMode)
+                    LOG_INFO("OptiScaler working as d3d12core.dll, system dll loaded");
+
+            } while (false);
+
+            if (originalModule != nullptr)
+            {
+                dllNames.push_back("d3d12core.dll");
+                dllNames.push_back("d3d12core");
+                dllNamesW.push_back(L"d3d12core.dll");
+                dllNamesW.push_back(L"d3d12core");
+
+                D3d12Proxy::Init(originalModule);
+                d3d12.LoadOriginalLibrary(originalModule);
+
+                // We are the Agility module the game just loaded:
+                // hook its interface entry point right away
+                D3D12Hooks::HookAgility(originalModule);
+
+                // dxgi factory hooks for swapchain/Present (menu + finished-picture NR)
+                if (Config::Instance()->OverlayMenu.value_or_default())
+                {
+                    DxgiProxy::Init();
+                    DxgiHooks::Hook();
+                }
+
+                State::Instance().workingMode = WorkingMode::D3d12;
+
+                modeFound = true;
+            }
+            else
+            {
+                if (!_passThruMode)
+                    LOG_ERROR("OptiScaler can't find original D3D12Core.dll!");
+            }
+
+            break;
+        }
+
     } while (false);
 
     // Work as a dummy dll

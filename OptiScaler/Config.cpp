@@ -619,6 +619,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             HookOriginalNvngxOnly.set_from_config(readBool("Hooks", "HookOriginalNvngxOnly"));
             EarlyHooking.set_from_config(readBool("Hooks", "EarlyHooking"));
             UseNtdllHooks.set_from_config(readBool("Hooks", "UseNtdllHooks"));
+            UseKernelHooks.set_from_config(readBool("Hooks", "UseKernelHooks"));
         }
 
         // RCAS
@@ -1586,6 +1587,7 @@ bool Config::SaveIni(std::filesystem::path destination)
                      GetBoolValue(Instance()->HookOriginalNvngxOnly.value_for_config()).c_str());
         ini.SetValue("Hooks", "EarlyHooking", GetBoolValue(Instance()->EarlyHooking.value_for_config()).c_str());
         ini.SetValue("Hooks", "UseNtdllHooks", GetBoolValue(Instance()->UseNtdllHooks.value_for_config()).c_str());
+        ini.SetValue("Hooks", "UseKernelHooks", GetBoolValue(Instance()->UseKernelHooks.value_for_config()).c_str());
     }
 
     // InitFlags

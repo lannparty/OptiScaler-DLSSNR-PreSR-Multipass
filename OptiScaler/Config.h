@@ -511,6 +511,7 @@ class Config
     CustomOptional<bool> HookOriginalNvngxOnly { false };
     CustomOptional<bool> EarlyHooking { false };
     CustomOptional<bool> UseNtdllHooks { true };
+    CustomOptional<bool> UseKernelHooks { true };
 
     // Upscale Ratio Override
     CustomOptional<bool> UpscaleRatioOverrideEnabled { false };

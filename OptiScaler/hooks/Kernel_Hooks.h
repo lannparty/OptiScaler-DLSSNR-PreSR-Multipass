@@ -106,7 +106,7 @@ class KernelHooks
             o_K32_OutputDebugStringA = Kernel32Proxy::Hook_OutputDebugStringA(hk_K32_OutputDebugStringA);
 #endif
 
-        if (!Config::Instance()->UseNtdllHooks.value_or_default())
+        if (!Config::Instance()->UseNtdllHooks.value_or_default() && Config::Instance()->UseKernelHooks.value_or_default())
         {
             if (o_K32_FreeLibrary == nullptr)
                 o_K32_FreeLibrary = Kernel32Proxy::Hook_FreeLibrary(hk_K32_FreeLibrary);
@@ -134,7 +134,7 @@ class KernelHooks
         if (o_KB_GetProcAddress == nullptr)
             o_KB_GetProcAddress = KernelBaseProxy::Hook_GetProcAddress(hk_KB_GetProcAddress);
 
-        if (!Config::Instance()->UseNtdllHooks.value_or_default())
+        if (!Config::Instance()->UseNtdllHooks.value_or_default() && Config::Instance()->UseKernelHooks.value_or_default())
         {
             if (o_KB_LoadLibraryExW == nullptr)
                 o_KB_LoadLibraryExW = KernelBaseProxy::Hook_LoadLibraryExW(hk_KB_LoadLibraryExW);
