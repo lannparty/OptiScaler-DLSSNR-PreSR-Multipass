@@ -754,18 +754,38 @@ void DlssNr_Dx12::PrepareStandaloneFinished(ID3D12Resource* picture, ID3D12Comma
     if (!runtimePreloadDone)
     {
         runtimePreloadDone = true;
-        const auto candidate = std::filesystem::path(Util::ExePath().parent_path()) / L"nvngx_dlssnr.dll";
-        HMODULE existing = nullptr;
-        if (GetModuleHandleExW(0, candidate.c_str(), &existing))
-            LOG_INFO("DLSS-NR standalone: runtime already in the process");
-        else
+        const auto tryLoad = [](const wchar_t* label, const std::filesystem::path& p, DWORD flags)
         {
-            const auto handle = LoadLibraryExW(candidate.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-            if (handle)
-                LOG_INFO("DLSS-NR standalone: runtime preloaded from {}", wstring_to_string(candidate.wstring()));
-            else
-                LOG_WARN("DLSS-NR standalone: runtime preload failed ({})", GetLastError());
+            const auto handle = LoadLibraryExW(p.c_str(), nullptr, flags);
+            LOG_INFO("DLSS-NR standalone: probe {} {} -> {} ({})", wstring_to_string(p.wstring()).c_str(), label,
+                     (void*) handle, handle ? 0 : GetLastError());
+            return handle;
+        };
+        const auto exeDir = std::filesystem::path(Util::ExePath().parent_path());
+        // A: baseline -- the exact candidate the compatibility loader will borrow.
+        if (!tryLoad(L"A-original", exeDir / L"nvngx_dlssnr.dll", LOAD_WITH_ALTERED_SEARCH_PATH))
+        {
+            // B..E: discriminate name / directory / flags on the same bytes.
+            tryLoad(L"E-plainflags", exeDir / L"nvngx_dlssnr.dll", 0);
+            const auto tempDir = std::filesystem::temp_directory_path();
+            std::error_code ec;
+            const auto tempSameName = tempDir / L"nvngx_dlssnr.dll";
+            std::filesystem::copy_file(exeDir / L"nvngx_dlssnr.dll", tempSameName,
+                                       std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec)
+                tryLoad(L"C-temp-samename", tempSameName, LOAD_WITH_ALTERED_SEARCH_PATH);
+            const auto tempRenamed = tempDir / L"osnrprobe.dll";
+            std::filesystem::copy_file(exeDir / L"nvngx_dlssnr.dll", tempRenamed,
+                                       std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec)
+                tryLoad(L"D-temp-renamed", tempRenamed, LOAD_WITH_ALTERED_SEARCH_PATH);
+            // F: a small unsigned dll from the same game directory, for a size axis.
+            tryLoad(L"F-small-gamedir", exeDir / L"nvngx.dll_dlssnr.dll", LOAD_WITH_ALTERED_SEARCH_PATH);
+            // G: a signed mid-size nvidia dll from the same directory.
+            tryLoad(L"G-signed-gamedir", exeDir / L"nvngx_dlssg.dll", LOAD_WITH_ALTERED_SEARCH_PATH);
         }
+        else
+            LOG_INFO("DLSS-NR standalone: runtime preloaded");
     }
 
     // Mirrors Dispatch's bookkeeping so the menu status and retry requests work on this path too.
