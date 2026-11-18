@@ -434,11 +434,26 @@ struct DlssNr_Dx12::State
 
         bool Clone(ComPtr<ID3D12Resource>& copy, ID3D12Resource* source);
 
-        Slot* Acquire(ID3D12GraphicsCommandList* cmd);
+        // A null cmd with a fallback device is the standalone route: no producer recording exists,
+        // so the device comes from the presenting queue instead of a game command list.
+        Slot* Acquire(ID3D12GraphicsCommandList* cmd, ID3D12Device* fallbackDevice = nullptr);
 
         void Arm(Slot& slot, ID3D12GraphicsCommandList* cmd);
 
         void Capture(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, bool rr);
+
+        // Standalone finished-picture mode: the game has no hookable upscaler, so no feature ever
+        // records a producer pass. The slot is armed straight from presentation with synthetic
+        // static-scene guides; everything downstream (model run, compose, fences) is unchanged.
+        void ArmStandalone(Slot& slot, ID3D12CommandQueue* queue);
+
+        bool EnsureStandaloneGuides(ID3D12Device* device, ID3D12CommandQueue* queue, unsigned width,
+                                    unsigned height);
+
+        void CaptureStandalone(ID3D12Resource* color, ID3D12CommandQueue* queue);
+
+        ComPtr<ID3D12Resource> standaloneDepth, standaloneMotion;
+        unsigned standaloneWidth = 0, standaloneHeight = 0;
 
         bool CaptureResidual(ID3D12GraphicsCommandList* cmd, ID3D12Resource* clean, ID3D12Resource* residual,
                              float scale, bool sceneLinear, bool reset);

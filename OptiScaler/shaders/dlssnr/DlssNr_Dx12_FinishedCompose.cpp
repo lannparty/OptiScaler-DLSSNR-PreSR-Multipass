@@ -21,7 +21,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     const bool scrgb = colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
     const bool sdr = colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     if ((!sdr && !pq && !scrgb) || (scrgb && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) ||
-        (!scrgb && desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format != DXGI_FORMAT_R10G10B10A2_UNORM))
+        (!scrgb && desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+         desc.Format != DXGI_FORMAT_R10G10B10A2_UNORM))
     {
         late.Cancel();
         late.Say("This screen colour format is not supported.");

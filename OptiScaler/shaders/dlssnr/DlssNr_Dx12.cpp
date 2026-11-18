@@ -803,6 +803,12 @@ static DXGI_COLOR_SPACE_TYPE ReadFinishedSpace(IDXGISwapChain* swapchain, ID3D12
     swapchain->GetPrivateData(FinishedColorSpaceKey, &size, &space);
     return space;
 }
+void DlssNr_Dx12::PrepareStandaloneFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue)
+{
+    std::lock_guard<std::recursive_mutex> lock(_state->mutex);
+    _state->late.CaptureStandalone(picture, queue);
+}
+
 void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue)
 {
     if (::State::Instance().isShuttingDown)
@@ -820,6 +826,43 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
             return;
         space = ReadFinishedSpace(swapchain, picture.Get());
     }
+
+    // Standalone finished-picture mode: a game without any hookable upscaler never creates a
+    // feature, so no DlssNr_Dx12 owner ever exists and the finished picture would silently wait
+    // forever. Synthesize one here; the compose pass itself runs the model from the slot's own
+    // command list, so a synthetic slot with static-scene guides is the whole difference.
+    static std::unique_ptr<DlssNr_Dx12> standaloneNr;
+    const bool want = config.DlssNrEnabled.value_or_default() &&
+                      config.DlssNrFinishedPicture.value_or_default() && picture.Get() != nullptr && queue != nullptr;
+    if (want && !activeNrOwner && !standaloneNr)
+    {
+        Microsoft::WRL::ComPtr<ID3D12Device> device;
+        if (SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))) && device)
+        {
+            // Created outside nrOwnersMutex: the constructor takes it.
+            standaloneNr = std::make_unique<DlssNr_Dx12>("Neural Rendering (standalone)", device.Get());
+            std::lock_guard lock(nrOwnersMutex);
+            ActivateNrOwner(standaloneNr.get());
+            LOG_INFO("DLSS-NR: standalone finished-picture owner created");
+        }
+    }
+
+    std::unique_ptr<DlssNr_Dx12> retireMe;
+    {
+        std::lock_guard lock(nrOwnersMutex);
+        if (standaloneNr && (!want || (activeNrOwner && activeNrOwner != standaloneNr.get())))
+        {
+            retireMe = std::move(standaloneNr);
+            if (activeNrOwner == retireMe.get())
+                activeNrOwner = nullptr;
+        }
+        else if (standaloneNr && activeNrOwner == standaloneNr.get())
+            activeNrOwner->PrepareStandaloneFinished(picture.Get(), queue);
+    }
+    // Retire takes nrOwnersMutex itself: called unlocked.
+    if (retireMe)
+        DlssNr_Dx12::Retire(std::move(retireMe));
+
     std::lock_guard lock(nrOwnersMutex);
     if (activeNrOwner)
         activeNrOwner->ApplyFinished(picture.Get(), queue, space);

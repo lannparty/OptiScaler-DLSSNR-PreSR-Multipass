@@ -113,6 +113,9 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     bool WaitFinished();
     void ApplyFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
                        bool gameFrameHandoff = false);
+    // Standalone finished-picture mode: parks a synthetic late slot (static-scene guides) for this
+    // backbuffer so the model runs without any game-side upscaler feature.
+    void PrepareStandaloneFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue);
     void ApplyFinishedDx11(IDXGISwapChain* swapchain);
     std::string FinishedStatus();
     std::string DeferredStatus();

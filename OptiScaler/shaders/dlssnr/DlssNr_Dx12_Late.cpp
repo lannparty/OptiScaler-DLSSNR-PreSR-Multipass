@@ -52,22 +52,35 @@ auto DlssNr_Dx12::State::LateContext::Clone(ComPtr<ID3D12Resource>& copy, ID3D12
     return copy != nullptr;
 }
 
-auto DlssNr_Dx12::State::LateContext::Acquire(ID3D12GraphicsCommandList* cmd) -> Slot*
+auto DlssNr_Dx12::State::LateContext::Acquire(ID3D12GraphicsCommandList* cmd, ID3D12Device* fallbackDevice) -> Slot*
 {
-    if (!cmd)
+    if (!cmd && !fallbackDevice)
     {
         Say("Waiting for the DirectX 12 bridge commands.");
         return nullptr;
     }
-    ComPtr<ID3D12Device> currentDevice;
-    if (FAILED(cmd->GetDevice(IID_PPV_ARGS(&currentDevice))))
-        return nullptr;
-    if (device && device != currentDevice)
+    if (cmd)
     {
-        Say("The graphics device changed. Restart the game to use this option.");
-        return nullptr;
+        ComPtr<ID3D12Device> currentDevice;
+        if (FAILED(cmd->GetDevice(IID_PPV_ARGS(&currentDevice))))
+            return nullptr;
+        if (device && device != currentDevice)
+        {
+            Say("The graphics device changed. Restart the game to use this option.");
+            return nullptr;
+        }
+        device = currentDevice;
     }
-    device = currentDevice;
+    else
+    {
+        if (device && device.Get() != fallbackDevice)
+        {
+            Say("The graphics device changed. Restart the game to use this option.");
+            return nullptr;
+        }
+        if (!device)
+            device = fallbackDevice;
+    }
     tracking.store(true);
     // Only the lightweight submission hook is needed, including when FG is disabled.
     ResTrack_Dx12::HookLateNrQueue(device.Get());
@@ -232,4 +245,161 @@ auto DlssNr_Dx12::State::LateContext::CaptureResidual(ID3D12GraphicsCommandList*
     slot.sceneLinear = sceneLinear;
     Arm(slot, cmd);
     return true;
+}
+
+auto DlssNr_Dx12::State::LateContext::ArmStandalone(Slot& slot, ID3D12CommandQueue* queue) -> void
+{
+    // No producer recording exists, so nothing will ever observe its submission: the slot is
+    // submitted here and now. The queue is remembered so ApplyFinishedColor's readiness check
+    // takes the same-queue fast path.
+    slot.producer = nullptr;
+    slot.producerQueue = queue;
+    slot.serial = ++serial;
+    slot.ready = slot.done + 1;
+    slot.done = slot.ready;
+    slot.submitted = true;
+    slot.pending = true;
+}
+
+auto DlssNr_Dx12::State::LateContext::EnsureStandaloneGuides(ID3D12Device* device, ID3D12CommandQueue* queue,
+                                                             unsigned width, unsigned height) -> bool
+{
+    if (standaloneDepth && standaloneWidth == width && standaloneHeight == height)
+        return true;
+
+    standaloneDepth.Reset();
+    standaloneMotion.Reset();
+    standaloneWidth = width;
+    standaloneHeight = height;
+
+    // Static-scene guides: far depth, zero motion. The finished picture carries the whole image;
+    // these only tell the model how the scene moves between frames.
+    standaloneDepth.Attach(owner.CreateScratch(device, DXGI_FORMAT_R32_FLOAT, width, height));
+    standaloneMotion.Attach(owner.CreateScratch(device, DXGI_FORMAT_R16G16_FLOAT, width, height));
+    if (!standaloneDepth || !standaloneMotion)
+    {
+        Say("Could not allocate the finished-picture guides.");
+        return false;
+    }
+
+    const auto upload = [device](uint32_t pattern, unsigned w, unsigned h) -> ComPtr<ID3D12Resource>
+    {
+        const UINT64 rowPitch = ((UINT64) w * 4 + 255u) & ~255ull;
+        D3D12_HEAP_PROPERTIES heap {};
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC desc {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = rowPitch * h;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ComPtr<ID3D12Resource> buffer;
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                   D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                   IID_PPV_ARGS(&buffer))))
+            return nullptr;
+        void* data = nullptr;
+        if (FAILED(buffer->Map(0, nullptr, &data)))
+            return nullptr;
+        auto* rows = static_cast<uint32_t*>(data);
+        for (unsigned y = 0; y < h; ++y)
+            for (unsigned x = 0; x < w; ++x)
+                rows[y * (rowPitch / 4) + x] = pattern;
+        buffer->Unmap(0, nullptr);
+        return buffer;
+    };
+
+    // 1.0f in R32_FLOAT; zero motion vectors.
+    ComPtr<ID3D12Resource> depthUpload = upload(0x3F800000u, width, height);
+    ComPtr<ID3D12Resource> motionUpload = upload(0x00000000u, width, height);
+    if (!depthUpload || !motionUpload)
+    {
+        Say("Could not prepare the finished-picture guides.");
+        return false;
+    }
+
+    // One-shot list on the presenting queue; both textures then rest in COPY_DEST, the state
+    // ApplyFinishedColor expects to find them in.
+    ComPtr<ID3D12Fence> fence;
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commands;
+    if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) ||
+        FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) ||
+        FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr,
+                                         IID_PPV_ARGS(&commands))))
+    {
+        Say("Could not prepare the finished-picture option.");
+        return false;
+    }
+    owner.Barrier(commands.Get(), standaloneDepth.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                  D3D12_RESOURCE_STATE_COPY_DEST);
+    owner.Barrier(commands.Get(), standaloneMotion.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                  D3D12_RESOURCE_STATE_COPY_DEST);
+    commands->CopyResource(standaloneDepth.Get(), depthUpload.Get());
+    commands->CopyResource(standaloneMotion.Get(), motionUpload.Get());
+    if (FAILED(commands->Close()))
+    {
+        Say("Could not prepare the finished-picture option.");
+        return false;
+    }
+    ID3D12CommandList* lists[] = { commands.Get() };
+    queue->ExecuteCommandLists(1, lists);
+    if (FAILED(queue->Signal(fence.Get(), 1)))
+    {
+        Say("The graphics queue stopped.");
+        return false;
+    }
+    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    const bool signalled = event && SUCCEEDED(fence->SetEventOnCompletion(1, event)) &&
+                           WaitForSingleObject(event, 2000) == WAIT_OBJECT_0;
+    if (event)
+        CloseHandle(event);
+    if (!signalled)
+    {
+        Say("The guide upload did not complete.");
+        return false;
+    }
+    return true;
+}
+
+auto DlssNr_Dx12::State::LateContext::CaptureStandalone(ID3D12Resource* color, ID3D12CommandQueue* queue) -> void
+{
+    if (!color || !queue)
+        return;
+    const auto desc = color->GetDesc();
+    if (desc.Width == 0 || desc.Height == 0 || desc.Height > 0xFFFFFFFFu)
+        return;
+    ComPtr<ID3D12Device> currentDevice;
+    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&currentDevice))))
+        return;
+    auto* next = Acquire(nullptr, currentDevice.Get());
+    if (!next)
+        return;
+    auto& slot = *next;
+    if (!EnsureStandaloneGuides(currentDevice.Get(), queue, (unsigned) desc.Width, (unsigned) desc.Height))
+    {
+        slot.pending = false;
+        return;
+    }
+    slot.depth = standaloneDepth;
+    slot.motion = standaloneMotion;
+    slot.residualOnly = false;
+    slot.responseValid = slot.cleanSceneValid = false;
+    slot.frame = {};
+    auto& frame = slot.frame;
+    frame.DepthInverted = false;
+    frame.MvScaleX = 1.0f;
+    frame.MvScaleY = 1.0f;
+    frame.Reset = reset;
+    frame.ColourIsLinearHdr = false;
+    frame.FinishedPicture = true;
+    frame.OutputArrivalState = D3D12_RESOURCE_STATE_PRESENT;
+    frame.IndependentCommands = true;
+    frame.SubmissionEpoch = ::State::Instance().frameCount;
+    frame.FrameTimeMs = 16.67f;
+    frame.OutputWidth = (unsigned) desc.Width;
+    frame.OutputHeight = (unsigned) desc.Height;
+    ArmStandalone(slot, queue);
 }
